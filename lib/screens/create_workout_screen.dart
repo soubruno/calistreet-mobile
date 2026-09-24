@@ -71,46 +71,62 @@ class _CreateWorkoutScreenState extends State<CreateWorkoutScreen> {
       _isLoading = true;
     });
 
-    final Map<String, dynamic>? workoutData = await _workoutService
-        .fetchWorkoutById(widget.workoutId!);
+    try {
+      final rawWorkoutData = await _workoutService.fetchWorkoutById(widget.workoutId!);
 
-    if (workoutData != null) {
-      _nameController.text = workoutData['name'] ?? '';
+      if (rawWorkoutData != null && mounted) {
+        // Garante a conversão estrita para Map<String, dynamic>
+        final Map<String, dynamic> workoutData = Map<String, dynamic>.from(rawWorkoutData);
 
-      final List<dynamic> exercisesJson =
-          workoutData['workout_exercises'] ?? [];
-      List<WorkoutExerciseItem> loadedItems = [];
+        _nameController.text = workoutData['name']?.toString() ?? '';
 
-      // Mapeia os exercícios aninhados para o DTO
-      for (var item in exercisesJson) {
-        // Acessa o objeto ANINHADO que contém os detalhes do exercício (name, video_url)
-        final Map<String, dynamic>? exerciseDetails =
-            item['exercises'] as Map<String, dynamic>?;
+        final List<dynamic> exercisesJson =
+            workoutData['workout_exercises'] as List<dynamic>? ?? [];
+        List<WorkoutExerciseItem> loadedItems = [];
 
-        loadedItems.add(
-          WorkoutExerciseItem(
-            exerciseId: item['exercise_id'] as String,
-            exerciseName: exerciseDetails?['name'] ?? 'Nome Desconhecido',
-            imageUrl:
-                exerciseDetails?['video_url'] ?? 'https://placehold.co/60',
+        for (var rawItem in exercisesJson) {
+          final item = Map<String, dynamic>.from(rawItem as Map);
+          
+          final Map<String, dynamic>? exerciseDetails = item['exercises'] != null
+              ? Map<String, dynamic>.from(item['exercises'] as Map)
+              : null;
 
-            sets: item['sets'] ?? 3,
-            repetitions: item['repetitions'] ?? 10,
-          ),
-        );
+          loadedItems.add(
+            WorkoutExerciseItem(
+              exerciseId: item['exercise_id']?.toString() ?? '',
+              exerciseName: exerciseDetails?['name']?.toString() ?? 'Nome Desconhecido',
+              imageUrl: exerciseDetails?['video_url']?.toString() ?? 'https://placehold.co/60',
+              sets: item['sets'] is int ? item['sets'] : (int.tryParse(item['sets']?.toString() ?? '3') ?? 3),
+              repetitions: item['repetitions'] is int
+                  ? item['repetitions']
+                  : (int.tryParse(item['repetitions']?.toString() ?? '10') ?? 10),
+            ),
+          );
+        }
+
+        setState(() {
+          _exercises = loadedItems;
+          _isLoading = false;
+        });
+      } else {
+        if (mounted) {
+          _showSnackbar(
+            'Treino não encontrado ou erro de carregamento.',
+            isError: true,
+          );
+          setState(() {
+            _isLoading = false;
+          });
+        }
       }
-
-      _exercises = loadedItems;
-    } else {
-      _showSnackbar(
-        'Treino não encontrado ou erro de carregamento.',
-        isError: true,
-      );
+    } catch (e) {
+      if (mounted) {
+        _showSnackbar('Erro ao carregar dados do treino: $e', isError: true);
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
-
-    setState(() {
-      _isLoading = false;
-    });
   }
 
   // FUNÇÃO UNIFICADA: Salva (Cria) ou Atualiza (Edita)

@@ -1,15 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
+import 'package:intl/intl.dart';
 import '../services/auth_service.dart';
+import '../services/workout_service.dart';
+import '../utils/logger.dart';
 import 'create_workout_screen.dart';
+import 'exercise_library_screen.dart';
+import 'my_workouts_screen.dart';
 import 'profile_screen.dart';
 import 'progress_screen.dart';
 import 'workout_in_progress_screen.dart';
-import 'my_workouts_screen.dart';
-import 'exercise_library_screen.dart';
-import 'package:intl/intl.dart';
-import '../services/workout_service.dart';
-import '../utils/logger.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -32,43 +32,51 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _loadUserData() async {
+    // 1. Lê os dados imediatos do cache local (Hive) através do AuthService
     final userData = AuthService.currentUser;
+
     if (userData != null) {
-      final userId = userData['user_id'] as String;
+      final String? name = userData['name'] as String?;
+      if (name != null && name.isNotEmpty && name != 'Usuário') {
+        setState(() {
+          _welcomeMessage = 'Olá, ${name.split(' ')[0]}!';
+          _isLoading = false;
+        });
+      }
 
-      // 1. Buscar dados do perfil
-      final profile = await AuthService.fetchUserProfile(userId);
+      // 2. Se houver conectividade, tenta sincronizar/atualizar o perfil em segundo plano
+      try {
+        final userId = userData['user_id'] as String;
+        final profile = await AuthService.fetchUserProfile(userId);
 
-      setState(() {
-        _isLoading = false;
-
-        // 2. Mensagem de boas-vindas com o Nome
-        if (profile != null && profile.containsKey('name')) {
-          _welcomeMessage = 'Olá, ${profile['name'].toString().split(' ')[0]}!';
+        if (mounted && profile != null && profile.containsKey('name')) {
+          setState(() {
+            _welcomeMessage = 'Olá, ${profile['name'].toString().split(' ')[0]}!';
+            _isLoading = false;
+          });
         }
-      });
-    } else {
+      } catch (e) {
+        Logger.debug('HomeScreen', 'Perfil carregado via cache offline.');
+      }
+    }
+
+    if (mounted && _isLoading) {
       setState(() {
         _isLoading = false;
-        _welcomeMessage = 'Olá, Usuário!';
       });
     }
   }
 
-  // Determina o treino do dia
+  // Determina o treino do dia (com suporte offline via Hive)
   void _loadTodaysWorkout() async {
     final userId = AuthService.currentUser?['user_id'];
     if (userId == null) return;
 
-    // 1. Obtém o dia atual em formato de 3 letras (ex: 'seg', 'ter', 'sáb')
-    // É CRUCIAL USAR 'pt_BR' para corresponder aos dados salvos no banco.
+    // 1. Obtém o dia atual em formato abreviado em pt_BR (ex: 'seg', 'ter', 'sáb')
     final currentDayName = DateFormat('EEE', 'pt_BR').format(DateTime.now());
-    final String dayAbbr = currentDayName.substring(
-      0,
-      3,
-    ); // Obtém as 3 primeiras letras
+    final String dayAbbr = currentDayName.substring(0, 3);
 
-    // 2. Formata para o padrão (Ex: 'Seg', 'Ter')
+    // 2. Formata para o padrão esperado (Ex: 'Seg', 'Ter')
     final String finalDayFilter =
         dayAbbr.substring(0, 1).toUpperCase() + dayAbbr.substring(1);
 
@@ -80,21 +88,20 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final WorkoutService service = WorkoutService();
 
-    // Busca o treino agendado para o dia de hoje
-    // A função retorna List<Map<...>>
+    // 3. Procura o treino agendado (se offline, o WorkoutService faz fallback para o Hive)
     final List<Map<String, dynamic>> workouts = await service
         .fetchUserWorkoutsByDay(userId as String, finalDayFilter);
 
-    setState(() {
-      // Atribui o primeiro treino encontrado à variável de estado, ou null se a lista estiver vazia.
-      _todaysWorkout = workouts.isNotEmpty ? workouts.first : null;
-    });
+    if (mounted) {
+      setState(() {
+        _todaysWorkout = workouts.isNotEmpty ? workouts.first : null;
+      });
+    }
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    // Resetar para Home quando volta de outra tela
     if (ModalRoute.of(context)?.isCurrent == true) {
       setState(() {
         _selectedIndex = 0;
@@ -173,7 +180,8 @@ class _HomeScreenState extends State<HomeScreen> {
               onTap: () {
                 Navigator.of(context).push(
                   MaterialPageRoute(
-                      builder: (context) => const ExerciseLibraryScreen()),
+                    builder: (context) => const ExerciseLibraryScreen(),
+                  ),
                 );
               },
             ),
@@ -185,10 +193,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildTodayWorkoutCard() {
     if (_todaysWorkout == null) {
-      return const SizedBox.shrink(); // Não mostra card se não houver treino agendado
+      return const SizedBox.shrink();
     }
 
     final String workoutName = _todaysWorkout!['name'] ?? 'Treino Agendado';
+
     return Container(
       width: double.infinity,
       decoration: BoxDecoration(
@@ -204,9 +213,37 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             child: Image.network(
               'https://images.unsplash.com/vector-1738325063770-a9785d40c39f?q=80&w=880&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D',
-              height: 300,
+              height: 220,
               width: double.infinity,
               fit: BoxFit.cover,
+              // Fallback elegante quando não há ligação à internet
+              errorBuilder: (context, error, stackTrace) {
+                return Container(
+                  height: 160,
+                  width: double.infinity,
+                  color: const Color(0xFF252525),
+                  alignment: Alignment.center,
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: const [
+                      Icon(
+                        Icons.fitness_center,
+                        color: Colors.white38,
+                        size: 44,
+                      ),
+                      SizedBox(height: 8),
+                      Text(
+                        'Calistreet Routine',
+                        style: TextStyle(
+                          color: Colors.white38,
+                          fontSize: 12,
+                          letterSpacing: 1.1,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
             ),
           ),
           Container(
@@ -245,11 +282,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   children: [
                     ElevatedButton(
                       onPressed: () {
-                        // Navega para a tela de treino em andamento
                         Navigator.of(context).push(
                           MaterialPageRoute(
-                            builder: (context) =>
-                                WorkoutInProgressScreen(workoutId: _todaysWorkout!['id']),
+                            builder: (context) => WorkoutInProgressScreen(
+                              workoutId: _todaysWorkout!['id'],
+                            ),
                           ),
                         );
                       },
@@ -279,7 +316,7 @@ class _HomeScreenState extends State<HomeScreen> {
       onTap: () {
         Navigator.of(context).push(
           MaterialPageRoute(builder: (context) => const MyWorkoutsScreen()),
-        );
+        ).then((_) => _loadTodaysWorkout()); // Atualiza a Home ao voltar
       },
       child: Container(
         width: double.infinity,
@@ -344,8 +381,8 @@ class _HomeScreenState extends State<HomeScreen> {
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
+                children: const [
+                  Text(
                     'Monte seu Treino',
                     style: TextStyle(
                       color: Colors.white,
@@ -353,8 +390,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       fontWeight: FontWeight.bold,
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  const Text(
+                  SizedBox(height: 8),
+                  Text(
                     'Crie um plano personalizado.',
                     style: TextStyle(color: Colors.white70, fontSize: 14),
                   ),
@@ -412,37 +449,41 @@ class _HomeScreenState extends State<HomeScreen> {
   void _navigateToScreen(int index) {
     switch (index) {
       case 0:
-        // Já está na tela home - não fazer nada
         break;
       case 1:
-        Navigator.of(
-          context,
-        ).push(MaterialPageRoute(builder: (context) => const ProgressScreen()));
+        Navigator.of(context).push(
+          MaterialPageRoute(builder: (context) => const ProgressScreen()),
+        );
         break;
       case 2:
-        // TODO: Navegar para Desafios
         break;
       case 3:
-        Navigator.of(
-          context,
-        ).push(MaterialPageRoute(builder: (context) => const ProfileScreen()));
+        Navigator.of(context).push(
+          MaterialPageRoute(builder: (context) => const ProfileScreen()),
+        );
         break;
     }
   }
 
   void _handleLogout() async {
     try {
-      AuthService.clearCurrentUser();
+      await AuthService.signOut();
+
       if (mounted) {
-        Navigator.of(context).pushReplacementNamed('/');
+        Navigator.of(context).pushNamedAndRemoveUntil(
+          '/',
+          (route) => false,
+        );
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Erro ao fazer logout: $e'),
-          backgroundColor: const Color(0xFF2C2C2C),
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erro ao fazer logout: $e'),
+            backgroundColor: const Color(0xFF2C2C2C),
+          ),
+        );
+      }
     }
   }
 }

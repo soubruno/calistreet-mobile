@@ -5,12 +5,11 @@ import '../services/progress_service.dart';
 import '../services/auth_service.dart';
 import 'home_screen.dart';
 
-// Cores baseadas no code.html e no padrão
-const Color primaryColor = Color(0xFF007AFF); // Azul padrão do projeto
+const Color primaryColor = Color(0xFF007AFF);
 const Color backgroundDark = Color(0xFF1A1A1A);
 const Color cardDark = Color(0xFF212121);
 const Color textDark = Color(0xFFFFFFFF);
-const Color subtextDark = Color(0xFFB0B0B0); // Cinza para subtexto
+const Color subtextDark = Color(0xFFB0B0B0);
 const Color errorColor = Color(0xFFE53935);
 
 class WorkoutInProgressScreen extends StatefulWidget {
@@ -23,28 +22,25 @@ class WorkoutInProgressScreen extends StatefulWidget {
 }
 
 class _WorkoutInProgressScreenState extends State<WorkoutInProgressScreen> {
-  // Cronômetro
   bool _isPaused = true;
   int _elapsedSeconds = 0;
+  int _lastExerciseSeconds = 0; // Marcação de tempo para cálculo por exercício
   Timer? _timer;
-  
+
   List<Map<String, dynamic>> _exercises = [];
   String _workoutName = '';
   bool _isLoading = true;
-  
-  // Progress tracking
+
   String? _progressId;
   final ProgressService _progressService = ProgressService();
   final WorkoutService _workoutService = WorkoutService();
 
-  // Calcula o progresso com base nos exercícios completados
   double get _overallProgress {
     if (_exercises.isEmpty) return 0.0;
     final completed = _exercises.where((e) => e['isCompleted'] == true).length;
     return completed / _exercises.length;
   }
-  
-  // Formata tempo do cronômetro
+
   int get _minutes => _elapsedSeconds ~/ 60;
   int get _seconds => _elapsedSeconds % 60;
 
@@ -52,43 +48,21 @@ class _WorkoutInProgressScreenState extends State<WorkoutInProgressScreen> {
   void initState() {
     super.initState();
     _loadWorkoutData();
-    _startWorkout();
   }
-  
+
   @override
   void dispose() {
     _timer?.cancel();
     super.dispose();
   }
-  
-  /// Inicia o treino e registra no banco
-  Future<void> _startWorkout() async {
-    try {
-      final userId = AuthService.currentUser?['user_id'] as String?;
-      if (userId == null) return;
-      
-      _progressId = await _progressService.startWorkoutProgress(
-        userId: userId,
-        workoutId: widget.workoutId,
-      );
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Erro ao iniciar treino')),
-        );
-      }
-    }
-  }
-  
-  /// Inicia/resume o cronômetro
+
   void _startTimer() {
-    // Cancela timer anterior se existir (evita múltiplos timers rodando)
     _timer?.cancel();
-    
+
     setState(() {
       _isPaused = false;
     });
-    
+
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (mounted) {
         setState(() {
@@ -97,18 +71,16 @@ class _WorkoutInProgressScreenState extends State<WorkoutInProgressScreen> {
       }
     });
   }
-  
-  /// Pausa o cronômetro
+
   void _pauseTimer() {
     _timer?.cancel();
     _timer = null;
-    
+
     setState(() {
       _isPaused = true;
     });
   }
-  
-  /// Toggle entre play e pause
+
   void _togglePause() {
     if (_isPaused) {
       _startTimer();
@@ -117,76 +89,100 @@ class _WorkoutInProgressScreenState extends State<WorkoutInProgressScreen> {
     }
   }
 
-  void _loadWorkoutData() async {
+  Future<void> _loadWorkoutData() async {
     final userId = AuthService.currentUser?['user_id'];
     if (userId == null) {
-      _showSnackbar('Usuário não logado.', isError: true);
+      _showSnackbar('Usuário não autenticado.', isError: true);
       Navigator.of(context).pop();
       return;
     }
-    
-    // Inicia a sessão no banco de dados
+
     try {
       final sessionId = await _progressService.startWorkoutProgress(
         userId: userId as String,
         workoutId: widget.workoutId,
       );
       _progressId = sessionId;
-      
+
       final workoutData = await _workoutService.fetchWorkoutById(widget.workoutId);
 
-      if (workoutData != null) {
+      if (mounted) {
+        if (workoutData != null) {
+          final exercisesJson =
+              workoutData['workout_exercises'] as List<dynamic>? ?? [];
+
+          setState(() {
+            _workoutName = workoutData['name'] ?? 'Treino Sem Nome';
+            _exercises = exercisesJson.map((item) {
+              final Map<String, dynamic>? exerciseDetails =
+                  item['exercises'] as Map<String, dynamic>?;
+
+              return {
+                'name': exerciseDetails?['name'] ?? 'Exercício',
+                'details':
+                    '${item['sets'] ?? 3} séries x ${item['repetitions'] ?? 10} repetições',
+                'isCompleted': false,
+                'duration_seconds': 0,
+              };
+            }).toList();
+            _isLoading = false;
+          });
+        } else {
+          setState(() {
+            _workoutName = 'Treino Offline';
+            _isLoading = false;
+          });
+          _showSnackbar(
+            'Treino aberto offline. Complete os exercícios e cronometre normalmente.',
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
         setState(() {
-          _workoutName = workoutData['name'] ?? 'Treino Desconhecido';
-          final exercisesJson = workoutData['workout_exercises'] as List<dynamic>? ?? [];
-          
-          _exercises = exercisesJson.map((item) {
-          final Map<String, dynamic>? exerciseDetails = item['exercises'] as Map<String, dynamic>?;
-          
-          return {
-            'name': exerciseDetails?['name'] ?? 'Nome Desconhecido',
-            'details': '${item['sets'] ?? 3} séries x ${item['repetitions'] ?? 10} repetições',
-            'isCompleted': false,
-          };
-        }).toList();
           _isLoading = false;
         });
+        _showSnackbar('Aviso: modo offline ativado.', isError: false);
       }
-
-    } catch (e) {
-      _showSnackbar('Erro ao iniciar o treino: ${e.toString()}', isError: true);
-      Navigator.of(context).pop();
     }
   }
 
-  /// Finaliza o treino e salva no banco
   void _finishWorkout() async {
-    if (_progressId == null) {
-      _showSnackbar('Treino não foi iniciado corretamente no sistema.', isError: true);
-      return;
-    }
-    
     _timer?.cancel();
 
-    try {
-      await _progressService.completeWorkoutProgress(
-        progressId: _progressId!,
-        durationSeconds: _elapsedSeconds,
-        notes: 'Treino concluído com ${(_overallProgress * 100).toInt()}% dos exercícios completados',
-      );
-      
-      _showSnackbar('Treino concluído! Progresso salvo.', isError: false);
+    if (_progressId != null) {
+      // 1. Prepara a lista detalhada com a duração de cada exercício
+      final breakdown = _exercises.map((e) {
+        int duration = (e['duration_seconds'] as int?) ?? 0;
+        // Se o usuário concluiu o treino direto sem marcar individualmente, divide por igual
+        if (duration == 0 && _exercises.isNotEmpty && _elapsedSeconds > 0) {
+          duration = _elapsedSeconds ~/ _exercises.length;
+        }
+        return {
+          'name': e['name'] ?? 'Exercício',
+          'duration_seconds': duration,
+        };
+      }).toList();
+
+      try {
+        await _progressService.completeWorkoutProgress(
+          progressId: _progressId!,
+          durationSeconds: _elapsedSeconds,
+          notes:
+              'Treino concluído com ${(_overallProgress * 100).toInt()}% dos exercícios completados',
+          exerciseTimestamps: breakdown,
+        );
+      } catch (_) {}
+    }
+
+    if (mounted) {
+      _showSnackbar('Treino concluído! Bom descanso.', isError: false);
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (context) => const HomeScreen()),
       );
-      
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Erro ao concluir o treino: ${e.toString()}'),
-      ));
     }
   }
-  
+
   void _showSnackbar(String message, {bool isError = false}) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -212,14 +208,6 @@ class _WorkoutInProgressScreenState extends State<WorkoutInProgressScreen> {
           style: const TextStyle(color: textDark, fontWeight: FontWeight.bold),
         ),
         centerTitle: true,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.more_vert, color: textDark),
-            onPressed: () {
-              /* TODO: Opções do treino */
-            },
-          ),
-        ],
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator(color: primaryColor))
@@ -239,7 +227,9 @@ class _WorkoutInProgressScreenState extends State<WorkoutInProgressScreen> {
                         const SizedBox(height: 32),
                         _buildPauseButton(),
                         const SizedBox(height: 32),
-                        _buildExerciseChecklist(),
+                        _exercises.isEmpty
+                            ? _buildEmptyExercisesCard()
+                            : _buildExerciseChecklist(),
                       ],
                     ),
                   ),
@@ -247,6 +237,23 @@ class _WorkoutInProgressScreenState extends State<WorkoutInProgressScreen> {
                 _buildFinishWorkoutButton(),
               ],
             ),
+    );
+  }
+
+  Widget _buildEmptyExercisesCard() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: cardDark,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: const Center(
+        child: Text(
+          'Treino iniciado em modo rápido. Utilize o cronômetro para marcar sua rotina.',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: subtextDark, fontSize: 14),
+        ),
+      ),
     );
   }
 
@@ -311,7 +318,7 @@ class _WorkoutInProgressScreenState extends State<WorkoutInProgressScreen> {
               ),
               Text(
                 '${(_overallProgress * 100).toInt()}%',
-                style: TextStyle(color: subtextDark),
+                style: const TextStyle(color: subtextDark),
               ),
             ],
           ),
@@ -341,14 +348,14 @@ class _WorkoutInProgressScreenState extends State<WorkoutInProgressScreen> {
           shape: BoxShape.circle,
           boxShadow: [
             BoxShadow(
-              color: primaryColor.withValues(alpha: 100),
+              color: primaryColor.withValues(alpha: 0.4),
               blurRadius: 10,
             ),
           ],
         ),
         child: Icon(
           _isPaused ? Icons.play_arrow : Icons.pause,
-          color: backgroundDark,
+          color: textDark,
           size: 40,
         ),
       ),
@@ -371,11 +378,22 @@ class _WorkoutInProgressScreenState extends State<WorkoutInProgressScreen> {
                   value: exercise['isCompleted'],
                   onChanged: (bool? newValue) {
                     setState(() {
-                      _exercises[index]['isCompleted'] = newValue ?? false;
+                      final bool isChecked = newValue ?? false;
+                      _exercises[index]['isCompleted'] = isChecked;
+
+                      // Calcula a duração do exercício atual com base no cronômetro
+                      if (isChecked) {
+                        final durationCurrent = _elapsedSeconds - _lastExerciseSeconds;
+                        _exercises[index]['duration_seconds'] =
+                            durationCurrent > 0 ? durationCurrent : 1;
+                        _lastExerciseSeconds = _elapsedSeconds;
+                      } else {
+                        _exercises[index]['duration_seconds'] = 0;
+                      }
                     });
                   },
                   activeColor: primaryColor,
-                  checkColor: backgroundDark,
+                  checkColor: textDark,
                   side: const BorderSide(color: Color(0xFF404040), width: 2),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(4),
@@ -391,16 +409,26 @@ class _WorkoutInProgressScreenState extends State<WorkoutInProgressScreen> {
                 ),
                 subtitle: Text(
                   exercise['details'],
-                  style: TextStyle(color: subtextDark, fontSize: 13),
+                  style: const TextStyle(color: subtextDark, fontSize: 13),
                 ),
                 onTap: () {
                   setState(() {
-                    _exercises[index]['isCompleted'] = !exercise['isCompleted'];
+                    final bool nextState = !exercise['isCompleted'];
+                    _exercises[index]['isCompleted'] = nextState;
+
+                    if (nextState) {
+                      final durationCurrent = _elapsedSeconds - _lastExerciseSeconds;
+                      _exercises[index]['duration_seconds'] =
+                          durationCurrent > 0 ? durationCurrent : 1;
+                      _lastExerciseSeconds = _elapsedSeconds;
+                    } else {
+                      _exercises[index]['duration_seconds'] = 0;
+                    }
                   });
                 },
               ),
               if (index < _exercises.length - 1)
-                const Divider(color: Color(0xFF404040), height: 1), // Divisor
+                const Divider(color: Color(0xFF404040), height: 1),
             ],
           );
         }).toList(),
@@ -426,7 +454,7 @@ class _WorkoutInProgressScreenState extends State<WorkoutInProgressScreen> {
           child: const Text(
             'Concluir Treino',
             style: TextStyle(
-              color: backgroundDark,
+              color: textDark,
               fontSize: 16,
               fontWeight: FontWeight.bold,
             ),

@@ -3,7 +3,6 @@ import 'create_workout_screen.dart';
 import '../../services/workout_service.dart';
 import '../../services/auth_service.dart';
 
-// Cores baseadas no padrão
 const Color primaryColor = Color(0xFF007AFF);
 const Color backgroundDark = Color(0xFF000000); 
 const Color cardDark = Color(0xFF1A1A1A); 
@@ -20,7 +19,7 @@ class MyWorkoutsScreen extends StatefulWidget {
 }
 
 class _MyWorkoutsScreenState extends State<MyWorkoutsScreen> {
-  List<Map<String, dynamic>> _userWorkouts = []; // Lista vazia, será populada
+  List<Map<String, dynamic>> _userWorkouts = [];
   bool _isLoading = true;
   final WorkoutService _workoutService = WorkoutService();
 
@@ -34,41 +33,91 @@ class _MyWorkoutsScreenState extends State<MyWorkoutsScreen> {
     final userId = AuthService.currentUser?['user_id'];
     
     if (userId == null) {
-      setState(() {
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
       return;
     }
 
-    setState(() {
-      _isLoading = true;
-    });
+    if (mounted) {
+      setState(() => _isLoading = true);
+    }
 
-    final List<Map<String, dynamic>> workouts = await _workoutService.fetchUserWorkouts(userId as String);
+    try {
+      final List<Map<String, dynamic>> workouts =
+          await _workoutService.fetchUserWorkouts(userId as String);
 
-    setState(() {
-      _userWorkouts = workouts;
-      _isLoading = false;
-    });
+      if (mounted) {
+        setState(() {
+          _userWorkouts = workouts;
+          _isLoading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
   }
   
   void _editWorkout(String workoutId) {
-    // Navega para a tela de criação/edição, passando o ID
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (context) => CreateWorkoutScreen(workoutId: workoutId), // <--- PASSANDO O ID
+        builder: (context) => CreateWorkoutScreen(workoutId: workoutId),
       ),
-    ).then((_) => _loadWorkouts()); // Recarrega a lista ao voltar
+    ).then((_) => _loadWorkouts());
   }
 
-  void _deleteWorkout(String workoutId) {
-    setState(() {
-      _userWorkouts.removeWhere((w) => w['id'] == workoutId);
-      // TODO: Implementar exclusão no Supabase
-    });
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Treino excluído com sucesso!'), backgroundColor: errorColor),
+  Future<void> _deleteWorkout(String workoutId) async {
+    // Confirmação antes de excluir
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: cardDark,
+        title: const Text('Excluir Treino', style: TextStyle(color: textDark)),
+        content: const Text(
+          'Deseja realmente excluir este treino? Esta ação não pode ser desfeita.',
+          style: TextStyle(color: subtextDark),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancelar', style: TextStyle(color: subtextDark)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Excluir', style: TextStyle(color: errorColor)),
+          ),
+        ],
+      ),
     );
+
+    if (confirm != true) return;
+
+    try {
+      await _workoutService.deleteWorkout(workoutId);
+
+      if (mounted) {
+        setState(() {
+          _userWorkouts.removeWhere((w) => w['id'] == workoutId);
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Treino excluído com sucesso!'),
+            backgroundColor: primaryColor,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Erro ao excluir treino. Verifique sua conexão.'),
+            backgroundColor: errorColor,
+          ),
+        );
+      }
+    }
   }
   
   @override
@@ -84,7 +133,6 @@ class _MyWorkoutsScreenState extends State<MyWorkoutsScreen> {
         ),
         title: const Text('Meus Treinos', style: TextStyle(color: textDark, fontWeight: FontWeight.bold)),
         actions: [
-          // Botão de Refresh
           IconButton(
             icon: const Icon(Icons.refresh, color: textDark),
             onPressed: _loadWorkouts,
@@ -95,9 +143,14 @@ class _MyWorkoutsScreenState extends State<MyWorkoutsScreen> {
           ? const Center(child: CircularProgressIndicator(color: primaryColor))
           : _userWorkouts.isEmpty
               ? _buildEmptyState()
-              : ListView(
-                  padding: const EdgeInsets.all(16),
-                  children: _userWorkouts.map((workout) => _buildWorkoutCard(workout)).toList(),
+              : RefreshIndicator(
+                  color: primaryColor,
+                  backgroundColor: cardDark,
+                  onRefresh: _loadWorkouts,
+                  child: ListView(
+                    padding: const EdgeInsets.all(16),
+                    children: _userWorkouts.map((workout) => _buildWorkoutCard(workout)).toList(),
+                  ),
                 ),
     );
   }
@@ -107,23 +160,23 @@ class _MyWorkoutsScreenState extends State<MyWorkoutsScreen> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.list_alt, color: subtextDark, size: 60),
+          const Icon(Icons.list_alt, color: subtextDark, size: 60),
           const SizedBox(height: 16),
-          Text('Nenhum treino encontrado.', style: TextStyle(color: textDark, fontSize: 18)),
+          const Text('Nenhum treino encontrado.', style: TextStyle(color: textDark, fontSize: 18)),
           const SizedBox(height: 8),
-          Text('Crie seu primeiro treino personalizado!', style: TextStyle(color: subtextDark)),
+          const Text('Crie seu primeiro treino personalizado!', style: TextStyle(color: subtextDark)),
           const SizedBox(height: 16),
           ElevatedButton(
             onPressed: () {
-               Navigator.of(context).push(
+              Navigator.of(context).push(
                 MaterialPageRoute(builder: (context) => const CreateWorkoutScreen()),
-              );
+              ).then((_) => _loadWorkouts());
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: primaryColor,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             ),
-            child: const Text('Montar Novo Treino'),
+            child: const Text('Montar Novo Treino', style: TextStyle(color: Colors.white)),
           )
         ],
       ),
@@ -139,26 +192,24 @@ class _MyWorkoutsScreenState extends State<MyWorkoutsScreen> {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: ListTile(
         contentPadding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
-        leading: Icon(Icons.fitness_center, color: primaryColor),
+        leading: const Icon(Icons.fitness_center, color: primaryColor),
         title: Text(
-          workout['name'] as String,
+          workout['name'] as String? ?? 'Treino Sem Nome',
           style: const TextStyle(color: textDark, fontWeight: FontWeight.bold),
         ),
         subtitle: Text(
           'Nível: $levelDisplay',
-          style: TextStyle(color: subtextDark),
+          style: const TextStyle(color: subtextDark),
         ),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Botão de Editar
             IconButton(
-              icon: Icon(Icons.edit, color: primaryColor, size: 20),
+              icon: const Icon(Icons.edit, color: primaryColor, size: 20),
               onPressed: () => _editWorkout(workout['id'] as String),
             ),
-            // Botão de Excluir
             IconButton(
-              icon: Icon(Icons.delete_outline, color: errorColor, size: 20),
+              icon: const Icon(Icons.delete_outline, color: errorColor, size: 20),
               onPressed: () => _deleteWorkout(workout['id'] as String),
             ),
           ],

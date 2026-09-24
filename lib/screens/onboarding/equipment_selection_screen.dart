@@ -390,9 +390,8 @@ class _EquipmentSelectionScreenState extends State<EquipmentSelectionScreen> {
       // 3. Preparar os dados para o Supabase
       final dataToSave = widget.onboardingData.toJson(userId as String);
 
-      // 4. Inserir na tabela 'user_profiles'
-      final serviceClient = AuthService.createServiceRoleClient();
-      await serviceClient.from('user_profiles').insert(dataToSave);
+      // 4. Inserir na tabela 'user_profiles' utilizando o cliente autenticado (respeitando RLS)
+      await AuthService.client.from('user_profiles').insert(dataToSave);
 
       // 5. Navegar para a Home e limpar a pilha de navegação
       if (mounted) {
@@ -402,7 +401,6 @@ class _EquipmentSelectionScreenState extends State<EquipmentSelectionScreen> {
             backgroundColor: primaryColor,
           ),
         );
-        // Assumindo que a rota '/' leva para AuthWrapper/HomeScreen
         Navigator.of(context).pushNamedAndRemoveUntil('/', (route) => false);
       }
     } catch (e) {
@@ -410,7 +408,7 @@ class _EquipmentSelectionScreenState extends State<EquipmentSelectionScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Erro ao finalizar cadastro: ${e.toString()}'),
-            backgroundColor: Color(0xFFE53935),
+            backgroundColor: const Color(0xFFE53935),
           ),
         );
       }
