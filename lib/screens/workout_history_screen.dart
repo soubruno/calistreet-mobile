@@ -2,16 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../../services/progress_service.dart';
 import '../../services/auth_service.dart';
-// NOTE: Você precisará de um modelo 'Progress' com os campos da tabela 'progress'
-// Ex: id, workout_id, start_date, end_date, duration_seconds, status
+import 'workout_session_detail_screen.dart';
 
-// Cores baseadas no padrão
 const Color primaryColor = Color(0xFF007AFF);
-const Color errorColor = Color(0xFFE53935); 
-const Color backgroundDark = Color(0xFF000000); 
-const Color cardDark = Color(0xFF1A1A1A); 
+const Color errorColor = Color(0xFFE53935);
+const Color backgroundDark = Color(0xFF000000);
+const Color cardDark = Color(0xFF1A1A1A);
 const Color textDark = Color(0xFFFFFFFF);
-const Color subtextDark = Color(0xFF888888); 
+const Color subtextDark = Color(0xFF888888);
 
 class WorkoutHistoryScreen extends StatefulWidget {
   const WorkoutHistoryScreen({super.key});
@@ -21,7 +19,7 @@ class WorkoutHistoryScreen extends StatefulWidget {
 }
 
 class _WorkoutHistoryScreenState extends State<WorkoutHistoryScreen> {
-  List<Map<String, dynamic>> _history = []; 
+  List<Map<String, dynamic>> _history = [];
   bool _isLoading = true;
   final ProgressService _progressService = ProgressService();
 
@@ -33,59 +31,106 @@ class _WorkoutHistoryScreenState extends State<WorkoutHistoryScreen> {
 
   Future<void> _loadHistory() async {
     final userId = AuthService.currentUser?['user_id'];
-    
+
     if (userId == null) {
-      setState(() { _isLoading = false; });
+      setState(() {
+        _isLoading = false;
+      });
       return;
     }
-    
-    setState(() { _isLoading = true; });
-
-    final List<Map<String, dynamic>> history = (await _progressService.getWorkoutHistory(userId as String))
-    .where((session) => (session['status'] as String).toUpperCase() == 'COMPLETED')
-    .toList();
 
     setState(() {
-      _history = history; // Popula a lista com dados reais
+      _isLoading = true;
+    });
+
+    final List<Map<String, dynamic>> history = (await _progressService.getWorkoutHistory(userId as String))
+        .where((session) => (session['status'] as String).toUpperCase() == 'COMPLETED')
+        .toList();
+
+    setState(() {
+      _history = history;
       _isLoading = false;
     });
   }
 
   String getStatusText(String status) {
-  switch (status.toUpperCase()) {
-    case 'COMPLETED':
-    case 'CONCLUIDO':
-      return 'COMPLETED';
-    case 'IN_PROGRESS':
-    case 'EM_ANDAMENTO':
-      return 'IN_PROGRESS';
-    case 'SKIPPED':
-    case 'CANCELADO':
-      return 'SKIPPED';
-    default:
-      return status;
+    switch (status.toUpperCase()) {
+      case 'COMPLETED':
+      case 'CONCLUIDO':
+        return 'COMPLETED';
+      case 'IN_PROGRESS':
+      case 'EM_ANDAMENTO':
+        return 'IN_PROGRESS';
+      case 'SKIPPED':
+      case 'CANCELADO':
+        return 'SKIPPED';
+      default:
+        return status;
+    }
   }
-}
+
+  // Agrupa os treinos por mês e ano (ex: Setembro de 2026)
+  Map<String, List<Map<String, dynamic>>> _groupHistoryByMonth(List<Map<String, dynamic>> list) {
+    final Map<String, List<Map<String, dynamic>>> groups = {};
+
+    for (final item in list) {
+      final DateTime date = item['date'] is DateTime
+          ? item['date']
+          : (DateTime.tryParse(item['date']?.toString() ?? '') ?? DateTime.now());
+
+      final String monthKey = DateFormat("MMMM 'de' yyyy", 'pt_BR').format(date);
+      final String capitalizedKey = monthKey[0].toUpperCase() + monthKey.substring(1);
+
+      groups.putIfAbsent(capitalizedKey, () => []).add(item);
+    }
+
+    return groups;
+  }
 
   @override
   Widget build(BuildContext context) {
+    final groupedWorkouts = _groupHistoryByMonth(_history);
+
     return Scaffold(
       backgroundColor: backgroundDark,
       appBar: AppBar(
         backgroundColor: backgroundDark,
         elevation: 0,
-        title: const Text('Histórico de Treinos', style: TextStyle(color: textDark, fontWeight: FontWeight.bold)),
+        title: const Text(
+          'Histórico de Treinos',
+          style: TextStyle(color: textDark, fontWeight: FontWeight.bold),
+        ),
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator(color: primaryColor))
           : _history.isEmpty
               ? _buildEmptyState()
-              : ListView.builder(
+              : ListView(
                   padding: const EdgeInsets.all(16),
-                  itemCount: _history.length,
-                  itemBuilder: (context, index) {
-                    return _buildHistoryCard(_history[index]);
-                  },
+                  children: groupedWorkouts.entries.map((entry) {
+                    final String monthHeader = entry.key;
+                    final List<Map<String, dynamic>> sessions = entry.value;
+
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.only(top: 12, bottom: 8, left: 4),
+                          child: Text(
+                            monthHeader,
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        ),
+                        ...sessions.map((session) => _buildHistoryCard(session)),
+                        const SizedBox(height: 12),
+                      ],
+                    );
+                  }).toList(),
                 ),
     );
   }
@@ -95,7 +140,7 @@ class _WorkoutHistoryScreenState extends State<WorkoutHistoryScreen> {
     final String date = DateFormat('dd/MM/yy').format(session['date'] as DateTime);
     final String status = getStatusText(session['status'] as String);
     Color statusColor = status == 'COMPLETED' ? primaryColor : errorColor;
-    
+
     return Card(
       color: cardDark,
       margin: const EdgeInsets.only(bottom: 12),
@@ -111,14 +156,18 @@ class _WorkoutHistoryScreenState extends State<WorkoutHistoryScreen> {
         ),
         subtitle: Text(
           '$date | Duração: $duration',
-          style: TextStyle(color: subtextDark),
+          style: const TextStyle(color: subtextDark),
         ),
         trailing: Text(
           status,
           style: TextStyle(color: statusColor, fontWeight: FontWeight.w600),
         ),
         onTap: () {
-          // TODO: Implementar navegação para a tela de detalhes do histórico
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (context) => WorkoutSessionDetailScreen(session: session),
+            ),
+          );
         },
       ),
     );
@@ -128,22 +177,27 @@ class _WorkoutHistoryScreenState extends State<WorkoutHistoryScreen> {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
-        children: [
+        children: const [
           Icon(Icons.history, color: subtextDark, size: 60),
-          const SizedBox(height: 16),
-          Text('Nenhuma sessão de treino encontrada.', style: TextStyle(color: textDark, fontSize: 18)),
-          const SizedBox(height: 8),
-          Text('Conclua seu primeiro treino para ver seu histórico!', style: TextStyle(color: subtextDark)),
+          SizedBox(height: 16),
+          Text(
+            'Nenhuma sessão de treino encontrada.',
+            style: TextStyle(color: textDark, fontSize: 18),
+          ),
+          SizedBox(height: 8),
+          Text(
+            'Conclua seu primeiro treino para ver seu histórico!',
+            style: TextStyle(color: subtextDark),
+          ),
         ],
       ),
     );
   }
 
-  // NOTE: A função formatSecondsToHoursMinutes deve estar definida globalmente ou no utilitário.
   String formatSecondsToHoursMinutes(int totalSeconds) {
     final hours = totalSeconds ~/ 3600;
     final minutes = (totalSeconds % 3600) ~/ 60;
-    
+
     if (hours > 0) {
       return '${hours}h ${minutes}m';
     } else if (minutes > 0) {

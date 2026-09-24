@@ -12,20 +12,13 @@ import 'package:intl/intl.dart';
 import 'profile_screen.dart';
 import 'workout_history_screen.dart';
 
-// Cores no padrão do seu app
-const Color primaryColor = Color(
-  0xFF007AFF,
-); // Azul - Primária para acentuação e gráfico (anteriormente Verde)
-const Color secondaryColor = Color(
-  0xFFFF6F00,
-); // Laranja - Mantido para Conquistas
-const Color backgroundDark = Color(0xFF000000); // Fundo Preto
-const Color cardDark = Color(
-  0xFF1A1A1A,
-); // Fundo do Card (Preto mais claro para contraste)
+const Color primaryColor = Color(0xFF007AFF);
+const Color secondaryColor = Color(0xFFFF6F00);
+const Color backgroundDark = Color(0xFF000000);
+const Color cardDark = Color(0xFF1A1A1A);
 const Color textDark = Color(0xFFFFFFFF);
-const Color subtextDark = Color(0xFF888888); // Cinza para subtexto
-const Color borderDark = Color(0xFF2C2C2C); // Borda
+const Color subtextDark = Color(0xFF888888);
+const Color borderDark = Color(0xFF2C2C2C);
 
 class ProgressScreen extends StatefulWidget {
   const ProgressScreen({super.key});
@@ -39,13 +32,12 @@ class _ProgressScreenState extends State<ProgressScreen> {
   final ProgressService _progressService = ProgressService();
 
   bool _isLoading = true;
-  String? _error;
+  bool _isOfflineNotice = false;
   List<Progress> _progressData = [];
   Map<String, double> _weeklyData = {};
   int _totalWorkouts = 0;
   String _totalTime = "0h 0m";
   List<Achievement> _latestAchievements = [];
-
 
   @override
   void initState() {
@@ -62,16 +54,21 @@ class _ProgressScreenState extends State<ProgressScreen> {
       }
 
       final progress = await _progressService.getLast7DaysProgress(userId);
-      setState(() {
-        _progressData = progress;
-        _processProgressData();
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _progressData = progress;
+          _processProgressData();
+          _isLoading = false;
+          _isOfflineNotice = false;
+        });
+      }
     } catch (e) {
-      setState(() {
-        _error = "Failed to load progress data.";
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _isOfflineNotice = true;
+        });
+      }
     }
   }
 
@@ -91,18 +88,15 @@ class _ProgressScreenState extends State<ProgressScreen> {
     int minutes = (totalSeconds % 3600) ~/ 60;
     _totalTime = "${hours}h ${minutes}m";
 
-    // Calcula o início da semana (segunda-feira)
     final now = DateTime.now();
     final startOfWeek = now.subtract(Duration(days: now.weekday - 1));
     
-    // Prepare data for the last 7 days for the chart (SEG a DOM)
     _weeklyData = LinkedHashMap.fromIterable(
       List.generate(7, (i) => startOfWeek.add(Duration(days: i))),
       key: (date) => DateFormat('E', 'pt_BR').format(date).toUpperCase(),
       value: (date) => 0.0,
     );
 
-    // Filtra progresso da semana atual (seg a dom)
     final endOfWeek = startOfWeek.add(const Duration(days: 6, hours: 23, minutes: 59, seconds: 59));
     List<Progress> weekProgress = _progressData
         .where((p) => 
@@ -115,7 +109,7 @@ class _ProgressScreenState extends State<ProgressScreen> {
       if (_weeklyData.containsKey(day)) {
         _weeklyData[day] =
             (_weeklyData[day] ?? 0) +
-            (p.durationSeconds ?? 0) / 60.0; // duration in minutes
+            (p.durationSeconds ?? 0) / 60.0;
       }
     }
   }
@@ -139,15 +133,12 @@ class _ProgressScreenState extends State<ProgressScreen> {
         ),
       ),
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : _error != null
-          ? Center(
-              child: Text(_error!, style: const TextStyle(color: Colors.red)),
-            )
+          ? const Center(child: CircularProgressIndicator(color: primaryColor))
           : SingleChildScrollView(
               padding: const EdgeInsets.all(16),
               child: Column(
                 children: [
+                  if (_isOfflineNotice) _buildOfflineBanner(),
                   _buildWeeklySummaryCard(),
                   const SizedBox(height: 16),
                   _buildActionButtons(),
@@ -157,6 +148,31 @@ class _ProgressScreenState extends State<ProgressScreen> {
               ),
             ),
       bottomNavigationBar: _buildBottomNavigation(),
+    );
+  }
+
+  Widget _buildOfflineBanner() {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF252525),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: borderDark),
+      ),
+      child: Row(
+        children: const [
+          Icon(Icons.wifi_off, color: primaryColor, size: 20),
+          SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Modo offline ativo. Exibindo dados locais gravados.',
+              style: TextStyle(color: textDark, fontSize: 12),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -231,7 +247,7 @@ class _ProgressScreenState extends State<ProgressScreen> {
         const SizedBox(height: 4),
         Text(
           label,
-          style: TextStyle(
+          style: const TextStyle(
             color: subtextDark,
             fontSize: 13,
             fontWeight: FontWeight.w500,
@@ -247,8 +263,7 @@ class _ProgressScreenState extends State<ProgressScreen> {
     required double minutes,
     bool isActive = false,
   }) {
-    final barColor = isActive ? primaryColor : primaryColor.withValues(alpha: 100);
-    // Define altura mínima de 8px para barras sem dados
+    final barColor = isActive ? primaryColor : primaryColor.withValues(alpha: 0.4);
     final double barHeight = heightRatio > 0 ? (100 * heightRatio) : 8.0;
 
     return GestureDetector(
@@ -317,9 +332,7 @@ class _ProgressScreenState extends State<ProgressScreen> {
           subtitle: 'Mostre seu progresso',
           icon: Icons.share,
           iconColor: secondaryColor,
-          onTap: () {
-            /* TODO: Implementar compartilhamento */
-          },
+          onTap: () {},
         ),
       ],
     );
@@ -362,13 +375,13 @@ class _ProgressScreenState extends State<ProgressScreen> {
                     const SizedBox(height: 4),
                     Text(
                       subtitle,
-                      style: TextStyle(color: subtextDark, fontSize: 13),
+                      style: const TextStyle(color: subtextDark, fontSize: 13),
                     ),
                   ],
                 ),
               ],
             ),
-            Icon(Icons.chevron_right, color: subtextDark),
+            const Icon(Icons.chevron_right, color: subtextDark),
           ],
         ),
       ),
@@ -443,7 +456,7 @@ class _ProgressScreenState extends State<ProgressScreen> {
 
   Widget _buildBottomNavigation() {
     return Container(
-      decoration: BoxDecoration(
+      decoration: const BoxDecoration(
         color: backgroundDark,
         border: Border(top: BorderSide(color: borderDark, width: 1)),
       ),
@@ -505,15 +518,16 @@ class _ProgressScreenState extends State<ProgressScreen> {
 
       final achievements = await _progressService.getUserAchievements(userId);
 
-      // Filtra apenas desbloqueadas e pega as 3 últimas
       final unlocked = achievements
           .where((a) => a.isUnlocked)
           .toList()
-        ..sort((a, b) => b.currentValue!.compareTo(a.currentValue!)); // Ou use outra métrica de ordem
+        ..sort((a, b) => (b.currentValue ?? 0).compareTo(a.currentValue ?? 0));
 
-      setState(() {
-        _latestAchievements = unlocked.take(3).toList();
-      });
+      if (mounted) {
+        setState(() {
+          _latestAchievements = unlocked.take(3).toList();
+        });
+      }
     } catch (e) {
       debugPrint("Erro ao carregar últimas conquistas: $e");
     }
