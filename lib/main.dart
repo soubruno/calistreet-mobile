@@ -2,6 +2,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'services/auth_service.dart';
 import 'screens/home_screen.dart';
 import 'screens/onboarding/personal_info_screen.dart';
@@ -9,10 +10,19 @@ import 'models/user_onboarding_data.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'utils/logger.dart';
 import 'utils/error_handler.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // 1. Inicializa o Hive para Flutter
+  try {
+    await Hive.initFlutter();
+    Logger.info('Main', 'Hive inicializado com sucesso');
+  } catch (e, stackTrace) {
+    Logger.error('Main', 'Erro ao inicializar Hive', error: e, stackTrace: stackTrace);
+  }
+  
   try {
     Logger.info('Main', 'Inicializando aplicação...');
     await initializeDateFormatting('pt_BR', null);
@@ -114,13 +124,30 @@ class AuthWrapper extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final user = AuthService.currentUser;
+    return StreamBuilder<AuthState>(
+      stream: AuthService.client.auth.onAuthStateChange,
+      builder: (context, snapshot) {
+        // Enquanto o SDK inicializa e lê a sessão gravada no disco
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            backgroundColor: Color(0xFF000000),
+            body: Center(
+              child: CircularProgressIndicator(
+                color: Color(0xFF007AFF),
+              ),
+            ),
+          );
+        }
 
-    if (user != null) {
-      return const HomeScreen();
-    } else {
-      return const LoginScreen();
-    }
+        final session = snapshot.data?.session ?? AuthService.client.auth.currentSession;
+
+        if (session != null) {
+          return const HomeScreen();
+        } else {
+          return const LoginScreen();
+        }
+      },
+    );
   }
 }
 
