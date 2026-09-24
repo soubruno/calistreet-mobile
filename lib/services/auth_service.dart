@@ -1,7 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:supabase/supabase.dart' as supabase_core;
-import 'package:crypto/crypto.dart';
-import 'dart:convert';
+import 'package:hive_flutter/hive_flutter.dart';
 import '../config/supabase_config.dart';
 import '../utils/logger.dart';
 import '../utils/error_handler.dart';
@@ -9,16 +7,8 @@ import '../utils/error_handler.dart';
 class AuthService {
   static SupabaseClient? _supabase;
 
-  static supabase_core.SupabaseClient createServiceRoleClient() {
-    return supabase_core.SupabaseClient(
-      SupabaseConfig.url,
-      SupabaseConfig.serviceRoleKey,
-      headers: {
-        'apikey': SupabaseConfig.serviceRoleKey,
-        'Authorization': 'Bearer ${SupabaseConfig.serviceRoleKey}',
-      },
-    );
-  }
+  static const String _userBoxName = 'user_box';
+  static const String _userProfileKey = 'current_user_profile';
 
   static SupabaseClient get client {
     _supabase ??= Supabase.instance.client;
@@ -44,12 +34,6 @@ class AuthService {
     }
   }
 
-  static String _hashPassword(String password) {
-    final bytes = utf8.encode(password);
-    final digest = sha256.convert(bytes);
-    return digest.toString();
-  }
-
   static Future<Map<String, dynamic>> signUp({
     required String email,
     required String password,
@@ -61,29 +45,33 @@ class AuthService {
         'Iniciando cadastro de usuário',
         extra: {'email': email},
       );
-      final hashedPassword = _hashPassword(password);
-      final serviceClient = createServiceRoleClient();
 
-      final result = await serviceClient.from('users').insert({
-        'email': email,
-        'password': hashedPassword,
-      }).select();
+      final AuthResponse response = await client.auth.signUp(
+        email: email.trim(),
+        password: password,
+        data: {'name': name.trim()},
+      );
 
-      if (result.isNotEmpty) {
-        final user = result.first;
+      final User? user = response.user;
+
+      if (user != null) {
         Logger.info(
           'AuthService',
           'Usuário cadastrado com sucesso',
-          extra: {'user_id': user['id']},
+          extra: {'user_id': user.id},
         );
-        return {
+
+        final userData = {
           'success': true,
-          'user_id': user['id'],
-          'email': user['email'],
-          'name': name,
-          'created_at': user['created_at'],
+          'user_id': user.id,
+          'email': user.email,
+          'name': name.trim(),
+          'created_at': user.createdAt,
           'message': 'Conta criada com sucesso!',
         };
+
+        setCurrentUser(userData);
+        return userData;
       } else {
         throw Exception('Falha ao criar conta - resposta vazia do servidor');
       }
@@ -107,29 +95,34 @@ class AuthService {
   }) async {
     try {
       Logger.info('AuthService', 'Iniciando login', extra: {'email': email});
-      final hashedPassword = _hashPassword(password);
-      final serviceClient = createServiceRoleClient();
 
-      final userData = await serviceClient
-          .from('users')
-          .select('*')
-          .eq('email', email)
-          .eq('password', hashedPassword);
+      final AuthResponse response = await client.auth.signInWithPassword(
+        email: email.trim(),
+        password: password,
+      );
 
-      if (userData.isNotEmpty) {
-        final user = userData.first;
+      final User? user = response.user;
+
+      if (user != null) {
         Logger.info(
           'AuthService',
           'Login realizado com sucesso',
-          extra: {'user_id': user['id']},
+          extra: {'user_id': user.id},
         );
-        return {
+
+        final String? userName = user.userMetadata?['name'] as String?;
+
+        final userData = {
           'success': true,
-          'user_id': user['id'],
-          'email': user['email'],
-          'created_at': user['created_at'],
+          'user_id': user.id,
+          'email': user.email,
+          'name': userName ?? user.email?.split('@')[0] ?? 'Usuário',
+          'created_at': user.createdAt,
           'message': 'Login realizado com sucesso!',
         };
+
+        setCurrentUser(userData);
+        return userData;
       } else {
         Logger.warning(
           'AuthService',
@@ -159,22 +152,29 @@ class AuthService {
         'Buscando perfil do usuário',
         extra: {'user_id': userId},
       );
-      final serviceClient = createServiceRoleClient();
 
-      final profileData = await serviceClient
+      final profileData = await client
           .from('user_profiles')
           .select('*')
           .eq('user_id', userId)
-          .single();
+          .maybeSingle();
 
-      Logger.info(
-        'AuthService',
-        'Perfil encontrado com sucesso',
-        extra: {'user_id': userId},
-      );
-      return profileData as Map<String, dynamic>;
+      if (profileData != null) {
+        Logger.info(
+          'AuthService',
+          'Perfil encontrado com sucesso',
+          extra: {'user_id': userId},
+        );
+
+        // Se encontrou nome no perfil, enriquece o cache local
+        if (profileData['name'] != null && _currentUser != null) {
+          _currentUser!['name'] = profileData['name'];
+          saveUserLocally(_currentUser!);
+        }
+      }
+
+      return profileData;
     } catch (e, stackTrace) {
-      // Se a busca falhar (ex: perfil não existe ou erro de conexão), retorna null
       Logger.warning(
         'AuthService',
         'Perfil não encontrado ou erro ao buscar',
@@ -187,23 +187,80 @@ class AuthService {
   }
 
   static Future<void> signOut() async {
-    clearCurrentUser();
+    try {
+      await client.auth.signOut();
+    } catch (e, stackTrace) {
+      Logger.error(
+        'AuthService',
+        'Erro ao encerrar sessão no Supabase',
+        error: e,
+        stackTrace: stackTrace,
+      );
+    } finally {
+      clearCurrentUser();
+    }
   }
 
   static Map<String, dynamic>? _currentUser;
 
-  static Map<String, dynamic>? get currentUser => _currentUser;
+  static Map<String, dynamic>? get currentUser {
+    if (_currentUser != null) return _currentUser;
 
-  static Future<bool> isUserAuthenticated() async => _currentUser != null;
+    // 1. Tenta obter da sessão ativa em memória do Supabase
+    final currentSession = client.auth.currentSession;
+    if (currentSession != null) {
+      final user = currentSession.user;
+      final String? metaName = user.userMetadata?['name'] as String?;
+      _currentUser = {
+        'user_id': user.id,
+        'email': user.email,
+        'name': metaName ?? user.email?.split('@')[0] ?? 'Usuário',
+      };
 
-  static Future<Map<String, dynamic>?> getCurrentUserData() async =>
-      _currentUser;
+      // Persiste no Hive em segundo plano
+      saveUserLocally(_currentUser!);
+      return _currentUser;
+    }
+
+    // 2. Fallback offline: se estiver sem rede e a sessão não foi revalidada, lê do Hive
+    try {
+      if (Hive.isBoxOpen(_userBoxName)) {
+        final box = Hive.box(_userBoxName);
+        final cached = box.get(_userProfileKey);
+        if (cached != null) {
+          _currentUser = Map<String, dynamic>.from(cached as Map);
+          return _currentUser;
+        }
+      }
+    } catch (_) {}
+
+    return _currentUser;
+  }
+
+  /// Salva os dados do usuário no Hive para acesso instantâneo e offline
+  static Future<void> saveUserLocally(Map<String, dynamic> userData) async {
+    try {
+      final box = await Hive.openBox(_userBoxName);
+      await box.put(_userProfileKey, userData);
+    } catch (e) {
+      Logger.warning('AuthService', 'Erro ao salvar usuário no Hive', error: e);
+    }
+  }
+
+  static Future<bool> isUserAuthenticated() async => client.auth.currentSession != null;
+
+  static Future<Map<String, dynamic>?> getCurrentUserData() async => currentUser;
 
   static void setCurrentUser(Map<String, dynamic> user) {
     _currentUser = user;
+    saveUserLocally(user);
   }
 
-  static void clearCurrentUser() {
+  static void clearCurrentUser() async {
     _currentUser = null;
+    try {
+      final box = await Hive.openBox(_userBoxName);
+      await box.clear();
+    } catch (_) {}
   }
 }
